@@ -1,0 +1,148 @@
+RUNBOOK
+======================================================================
+=          RUNBOOK: MANUAL DE OPERACIONES TÉCNICAS (SOPORTE)         =
+======================================================================
+Versión: 1.0
+Fecha: 15 de Octubre de 2025
+Autor: [Tu Nombre]
+
+Propósito: Este documento detalla los procedimientos paso a paso para resolver incidencias comunes relacionadas con la base de datos de tiendas y la API de credenciales. El objetivo es estandarizar las operaciones y servir como guía de entrenamiento.
+
+---
+
+### CASO 1: Generar Reporte de Uso de Etiquetas
+
+**Situación:** El equipo de Go To Market solicita un reporte sobre cuántas tiendas usan cada etiqueta para análisis de mercado.
+
+**Análisis Técnico:** La información de las etiquetas está en la tabla `stores`, dentro de una columna JSON llamada `data`. Las etiquetas no están en un formato unificado; están dispersas en tres claves diferentes: `tag`, `tags`, y `tag2`. La consulta debe extraer la información de las tres, unificarlas y luego contarlas.
+
+**Procedimiento:**
+1.  Conéctese a la base de datos PostgreSQL usando DBeaver o una herramienta similar.
+2.  Abra un nuevo editor de SQL.
+3.  Copie y ejecute la siguiente consulta:
+
+```sql
+-- Paso 1: Crear una Tabla Común de Expresiones (CTE) llamada 'all_tags'
+-- Esta sección unifica los valores de las tres claves de etiquetas en una sola columna virtual.
+-- Se usa UNION ALL para apilar los resultados de las tres consultas SELECT.
+WITH all_tags AS (
+    SELECT data ->> 'tag' AS tag FROM stores
+    UNION ALL
+    SELECT data ->> 'tags' AS tag FROM stores
+    UNION ALL
+    SELECT data ->> 'tag2' AS tag FROM stores
+)
+-- Paso 2: Contar y agrupar los resultados de la tabla virtual
+-- Ahora se consultan los datos unificados como si fuera una tabla real.
+SELECT
+    tag,
+    COUNT(*) AS store_count
+FROM
+    all_tags
+WHERE
+    tag IS NOT NULL -- Se excluyen las filas donde no había etiqueta para evitar contar nulos.
+GROUP BY
+    tag
+ORDER BY
+    store_count DESC; -- Se ordena para mostrar las etiquetas más populares primero.
+	
+**RESULTADO ESPERADO CASO 1: Una tabla de dos columnas: tag (el nombre de la etiqueta) y store_count (el número de tiendas que la usan)**
+
+
+CASO 2: Actualizar Datos de una Tienda Específica
+Situación: Una solicitud urgente requiere cambiar el nombre del propietario de la tienda con ID 0d4f7a40-651d-44fb-8744-04d9b31ef844 a "Old-Wolf" y actualizar su etiqueta principal a "educación".
+
+Análisis Técnico: La operación requiere una consulta UPDATE en la tabla stores. Dado que los datos están en una columna JSON, se debe usar la función jsonb_set de PostgreSQL. Esta función permite 
+modificar valores dentro de un objeto JSON sin afectar al resto de sus datos. La función se anida para realizar múltiples cambios en una sola operación.
+
+PROCEDIMIENTO:
+1. EN Dbeaver, SE COPIA Y EJECUTA LA SIGUIENTE CONSULTA (CAMBIO DE NOMBRE A Old-Wolf)
+
+***SQL
+UPDATE
+    stores
+SET
+    -- Se anida jsonb_set para realizar la actualización en dos pasos atómicos.
+    -- La función exterior actualiza la etiqueta, y la interior actualiza el nombre.
+    data = jsonb_set(
+        jsonb_set(data::jsonb, '{name}', '"Old-Wolf"'), -- Primero, se actualiza el valor de la clave 'name'.
+        '{tags}', '"educación"' -- Luego, sobre ese resultado, se actualiza el valor de la clave 'tags'.
+    )
+WHERE
+    id = '0d4f7a40-651d-44fb-8744-04d9b31ef844';
+	
+2. EN CASO DE QUERER VALIDAR QUE EL ID FUE ACTUALIZADO AL NOMBRE Old-Wolf, SE EJECUTA EL SIGUIENTE COMANDO
+
+**SQL
+SELECT id, data FROM stores WHERE id = '0d4f7a40-651d-44fb-8744-04d9b31ef844';
+
+** RESULTADO ESPERADO DE LA SECCIÓN CASO 2:La consulta UPDATE debe ejecutarse con éxito. La consulta de 
+verificación mostrará el campo data con los nuevos valores para name.
+
+CASO 3: Agregar Credenciales de un Aliado vía API
+
+EJERCICIO:Se necesita agregar credenciales para el aliado con ID 1f585fc9-4926-468c-a728-eb34d80e9ea1 usando la API.
+
+ANALISIS TECNICO: La operación requiere una solicitud POST al endpoint /allies/{allyId}/credentials. Durante la investigación inicial, se descubrió un bug en la API: 
+el servidor esperaba la clave username en el cuerpo JSON, pero la documentación o el uso común podría llevar a enviar user, causando un KeyError: 'username' en el servidor y un 500 Internal Server Error como respuesta. La solicitud debe ser construida con la clave correcta.
+
+PROCEDIMIENTO: 
+
+1.Asegúrese de que los contenedores de Docker estén en ejecución (docker compose up).
+
+2.Abra una nueva terminal de PowerShell.
+
+3.Copie y ejecute el siguiente comando Invoke-WebRequest (PARA ACCEDER A LA URL DE LA API):
+
+PowerShell:
+Invoke-WebRequest -Uri '[http://127.0.0.1:4000/allies/1f585fc9-4926-468c-a728-eb34d80e9ea1/credentials](http://127.0.0.1:4000/allies/1f585fc9-4926-468c-a728-eb34d80e9ea1/credentials)' `
+-Method POST `
+-Headers @{'Content-Type'='application/json'} `
+-Body '{"username": "aliado_addi", "password": "}sxh7_5}BdJ4K:Qf"}'
+
+RESULTADO ESPERADO:Una respuesta HTTP con StatusCode: 200 (ESTA EN LINEA) y un cuerpo JSON confirmando que las credenciales fueron añadidas, similar a esto:
+
+**JSON
+{
+  "AllyId": "1f585fc9-4926-468c-a728-eb34d80e9ea1",
+  "AllyName": "Barnes Inc",
+  "message": "Credentials added"
+}
+
+CASO 4: DIAGNOSTICO DE FALLOS EN SOLICITUDES PASADAS (examples.logs)
+
+SITUACIÓN:Se han recibido quejas sobre credenciales que no funcionan. Se debe analizar el archivo de logs extra/log/example.log para encontrar la cantidad de fallos y los clientes afectados.
+
+ANALISIS TECNICO: Los logs no contienen mensajes de error explícitos en texto. En su lugar, registran códigos de estado HTTP. Las solicitudes fallidas son aquellas con códigos 4xx (errores del cliente) o 5xx (errores del servidor). 
+La búsqueda debe realizarse utilizando una expresión regular para encontrar estos códigos.
+
+PROCEDIMIENTO:
+
+1. Abrir una terminal de PowerShell en la Raiz del proyecto (C:\Users\bbrra\Documents\GitHub\SE-technical-challenge)
+2. Para contar el número total de solicitudes fallidas, ejecute:
+*Este comando busca un patrón de texto que corresponda a un código de error 
+HTTP (404, 500, etc.) y luego cuenta las líneas encontradas.
+
+***PowerShell
+Select-String -Path "extra\log\example.log" -Pattern "\s[45]\d{2}\s" | Measure-Object
+
+RESULTADO ESPERADO: Una tabla donde el valor Count indica el número total de fallos.
+
+3.Identificar los clientes afectados y los detalles del error, ejecutar:
+
+*Este comando muestra cada linea completa del log que contiene un codigo de error.
+
+***PowerShell
+Select-String -Path "extra\log\example.log" -Pattern "\s[45]\d{2}\s"
+
+RESULTADO ESPERADO: Una lista de todas las solicitudes fallidas. 
+El cliente afectado es la dirección IP al principio de cada línea.
+
+
+GUIA RAPIDA DE ANALISIS
+
+1. Identificar al Cliente: Anotar la dirección IP. (EN ESTE CASO STORES)
+
+2. Analizar el Error: Revisar el código (404 significa que la URL o el allyId era incorrecto; 400 (ERROR DEL CLIENTE) significa que el cuerpo JSON era inválido) Y 500 (ERROR DEL SERVIDOR)
+
+3. Acción Correctiva: Notificar al cliente con la información correcta para que pueda reintentar su solicitud. Si el error es un 5xx, escalar a desarrollo.
